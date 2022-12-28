@@ -1,3 +1,9 @@
-import Core
+import core
 
-design = Core.Design('counter')
+def main():
+  plcr = core.Placer('counter')
+  plcr.Density(plcr.x, plcr.y)
+  plcr.densityHeatMap()
+
+if __name__ == "__main__":
+  main()

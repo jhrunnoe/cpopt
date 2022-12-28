@@ -1,101 +1,123 @@
 import numpy as np
-from scipy.sparse import coo_matrix
-import json
-import gzip
-import re
+from design import Design
+import seaborn as sb
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
-class Cell:
-  def __init__(self, x, y, dx, dy, ID = None):
-    self.ID = ID # Interger between 0 and nC - 1 where nC = |C| is the number of cells
+class Rect:
+  def __init__(self, x, y, dx, dy):
     self.x  = x
     self.y  = y
     self.dx = dx
     self.dy = dy
+    # Derived properties
+    self.cx = x + 0.50*dx
+    self.cy = y + 0.50*dy
+    self.A  = dx*dy
 
-    # Temporarily using the center for the pin location
-    self.px = x + 0.50*dx
-    self.py = y + 0.50*dy
+class Bin(Rect):
+  def __init__(self, x, y, dx, dy):
+    super(Bin, self).__init__(x, y, dx, dy)
+    self.density = 0
 
+class Cell(Rect):
+  def __init__(self, x, y, dx, dy, ID):
+    super(Cell, self).__init__(x, y, dx, dy)
+    self.ID = ID
+  def getCellx(self, x):
+    return x[self.ID]
 
-class Net:
+  def celly(self, y):
+    return y[self.ID]
+
+class Net:        
   def __init__(self, cells):
     self.cells = cells
-    self.size = len(self.cells)
-
-    self.IDs = [None]*self.size
-    self.x = np.empty((self.size, 1))
-    self.y = np.empty((self.size, 1))
+    self.IDs = [c.ID for c in cells]
+    self.size = len(self.IDs)
+  def getNetx(self, x):
+    netx = np.empty((self.size, 1))
     for i in range(self.size):
-      self.IDs[i] = cells[i].ID
-      self.x[i] = cells[i].x
-      self.y[i] = cells[i].y
-      
-  def HPWL(self):
-    dx = self.x.max() - self.x.min()
-    dy = self.y.max() - self.y.min()
-    return 0.50*(dx + dy)
+      netx[i] = self.cells[i].cellx(x)
+    return netx
+  def getNety(self, y):
+    nety = np.empty((self.size, 1))
+    for i in range(self.size):
+      nety[i] = self.cells[i].celly(y)
+    return nety
 
+class Placer:
+  gridResolution = 512
 
-class Design:
-  '''The Design class specifies the chip design information 
-     relevant to cell placement optimization'''
-  def __init__(self, designName):
-    self.name = designName
-    self.path = './NCSU-DigIC-GraphData-2022-10-15/'
-    self.R = self.SetupRegion()
-    self.C = self.SetupCells()
-    self.N = self.SetupNetList()
+  def __init__(self, name):
+    chip = Design(name)
 
-  def SetupRegion(self):
-    with open(self.path + self.name + '/' + self.name + '_route_opt.def') as f:
-      for line in f:
-        if 'DIEAREA' in line:
-          die = [int(s) for s in re.findall(r'\d+', line)] # This gets numeric values from the die area line
-          Rx  = die[0]
-          Ry  = die[1]
-          dRx = die[4] - Rx
-          dRy = die[5] - Ry
-          return Cell(Rx, Ry, dRx, dRy)
-  
-  def SetupCells(self):
-    with gzip.open(self.path + 'cells.json.gz', 'rb') as f:
-      cells = json.loads(f.read().decode('utf-8'))
+    self.nC = chip.nC
+    self.nN = chip.nN
+    self.R  = Rect(chip.R['x'], chip.R['y'], chip.R['dx'], chip.R['dy'])
 
-    with gzip.open(self.path + self.name + '/' + self.name + '.json.gz', 'rb') as f:
-      design = json.loads(f.read().decode('utf-8'))
+    self.x  = chip.x0 + 1*min(self.R.dx - (chip.x0 + chip.dx))*np.random.rand(self.nC)
+    self.y  = chip.y0 + 1*min(self.R.dy - (chip.y0 + chip.dy))*np.random.rand(self.nC)
+    self.dx = chip.dx
+    self.dy = chip.dy
 
-    # Extract instance coordinates & dimensions
-    C  = list()
+    self.eps = int(np.ceil(min(self.R.dx, self.R.dy))/self.gridResolution)
+    self.nGx = int(np.ceil(self.R.dx/self.eps))
+    self.nGy = int(np.ceil(self.R.dy/self.eps))
 
-    for instance in design['instances']:
-      xloc   = instance['xloc']
-      yloc   = instance['yloc']
-      index  = instance['cell'] # For looking up dimensions of this cell type
-      orient = instance['orient']
+    self.C = np.empty(self.nC, dtype=object)
+    for i in range(self.nC):
+      self.C[i] = Cell(self.x[i], self.y[i], self.dx[i], self.dy[i], i)
 
-      width  = cells[index]['width']
-      height = cells[index]['height']
-      i = instance['id'] # The cell id
-
-      (dx, dy) = (height, width) if orient in [1, 3, 5, 7] else (width, height)
-
-      if orient in [1, 2, 4, 5]:
-        xloc -= dx # lower x coordinate after rotation/reflection
-      if orient in [2, 3, 5, 6]:
-        yloc -= dy # lower y coordinate after rotation/reflection
-
-      C.append(Cell(xloc, yloc, dx, dy, i))
-    return C
-
-  def SetupNetList(self):
-    conn = np.load(self.path + self.name + '/' + self.name + '_connectivity.npz')
-    coo = coo_matrix((conn['data'], (conn['row'], conn['col'])), shape = conn['shape'])
-    self.nC, self.nN = coo.get_shape()
-    N = list()
+    self.N = np.empty(self.nN, dtype=object)
     for j in range(self.nN):
-      IDs = coo.row[np.where(coo.col == j)]
-      N.append(Net([self.C[i] for i in IDs]))
-    return N
+      self.N[j] = Net(self.C[chip.N[j]])
 
-  def HPWL(self):
-    return sum(n.HPWL() for n in self.N)
+    self.G = np.empty((self.nGx, self.nGy), dtype=object)
+    for i in range(self.nGx):
+      for j in range(self.nGy):
+        self.G[i, j] = Bin(self.R.x + i*self.eps, self.R.y + j*self.eps, self.eps, self.eps) 
+
+  def Overlap(self, r1, r2):
+    dx = max(0, min(r1.x + r1.dx, r2.x + r2.dx) - max(r1.x, r2.x))
+    dy = max(0, min(r1.y + r1.dy, r2.y + r2.dy) - max(r1.y, r2.y))
+    return dx*dy
+
+  def Density(self, x, y):
+    for idx in range(self.nC):
+      li = int((x[idx] - np.mod(x[idx], self.eps))/self.eps)
+      lj = int((y[idx] - np.mod(y[idx], self.eps))/self.eps)
+      ui = int((x[idx] + self.dx[idx] - np.mod(x[idx] + self.dx[idx], self.eps))/self.eps)
+      uj = int((y[idx] + self.dy[idx] - np.mod(y[idx] + self.dy[idx], self.eps))/self.eps) 
+      
+      # Iterate through grid elements intersecting current cell and increment the
+      # grid elements' density by (overlap area)/(bin area)
+
+      lx = self.R.x + (li + 1)*self.eps
+      ux = self.R.x + ui*self.eps
+      ly = self.R.y + (lj + 1)*self.eps
+      uy = self.R.y + uj*self.eps
+
+      self.G[li, lj].density += (lx - x[idx])*(ly - y[idx])/self.eps**2
+      self.G[li, uj].density += (lx - x[idx])*(y[idx] + self.dy[idx] - uy)/self.eps**2
+      self.G[ui, lj].density += (x[idx] + self.dx[idx] - ux)*(ly - y[idx])/self.eps**2
+      self.G[ui, uj].density += (x[idx] + self.dx[idx] - ux)*(y[idx] + self.dy[idx] - uy)/self.eps**2
+      for j in range(lj + 1, uj):
+        self.G[li, j].density += (lx - x[idx])/self.eps
+        self.G[ui, j].density += (x[idx] + self.dx[idx] - ux)/self.eps
+      for i in range(li + 1, ui):
+        self.G[i, lj].density += (ly - y[idx])/self.eps
+        self.G[i, uj].density += (y[idx] + self.dy[idx] - uy)/self.eps
+      for i in range(li + 1, ui):
+        for j in range(lj + 1, uj):
+          self.G[i, j].density += 1
+
+  def densityHeatMap(self):
+    G = np.zeros((self.nGy, self.nGx))
+
+    for i in range(self.nGy):
+      for j in range(self.nGx):
+        G[i, j] = self.G[j, (self.nGy - 1) - i].density
+
+    sb.heatmap(G)
+    plt.show()
