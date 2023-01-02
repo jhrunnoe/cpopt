@@ -35,11 +35,14 @@ class Design:
       design = json.loads(f.read().decode('utf-8'))
 
     self.nC = len(design['instances'])
+    self.nN = len(design['nets'])
 
     self.x0 = np.empty(self.nC)
     self.y0 = np.empty(self.nC)
     self.dx = np.empty(self.nC)
     self.dy = np.empty(self.nC)
+
+    self.cellNames = [None]*self.nC
 
     for instance in design['instances']:
       xloc   = instance['xloc']
@@ -62,9 +65,14 @@ class Design:
       self.y0[i] = yloc
       self.dx[i] = dx
       self.dy[i] = dy
-    
+      self.cellNames[i] = instance['name'] 
+
     # Netlist extraction
     conn = np.load(self.dir + '_connectivity.npz')
     coo = coo_matrix((conn['data'], (conn['row'], conn['col'])), shape = conn['shape'])
-    self.nN = coo.get_shape()[1] # The number of columns
-    self.N = [coo.row[np.where(coo.col == j)] for j in range(self.nN)]
+    
+    self.netNames = [None]*self.nN
+    self.N        = [None]*self.nN
+    for j in range(self.nN):
+      self.netNames[j] = design['nets'][j]['name']
+      self.N[j] = coo.row[np.where(coo.col == j)]
