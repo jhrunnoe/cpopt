@@ -11,8 +11,8 @@ class Design:
       - (x0, y0): Initial (x, y)-coordinates of all instances
       - (dx, dy): Physical dimensions of all instances
       - N       : Netlist that defines instance connectivity
-      - nC      : The number of cells (instances)
-      - nN      : The number of nets in the netlist
+      - nCells : The number of cells (instances)
+      - nNets  : The number of nets in the netlist
   '''
   def __init__(self, name):
     self.name = name
@@ -32,19 +32,19 @@ class Design:
       cells = json.loads(f.read().decode('utf-8'))
 
     with gzip.open(self.dir + '.json.gz', 'rb') as f:
-      design = json.loads(f.read().decode('utf-8'))
+      spec = json.loads(f.read().decode('utf-8'))
 
-    self.nC = len(design['instances'])
-    self.nN = len(design['nets'])
+    self.nCells = len(spec['instances'])
+    self.nNets  = len(spec['nets'])
 
-    self.x0 = np.empty(self.nC)
-    self.y0 = np.empty(self.nC)
-    self.dx = np.empty(self.nC)
-    self.dy = np.empty(self.nC)
+    self.x0 = np.empty(self.nCells)
+    self.y0 = np.empty(self.nCells)
+    self.dx = np.empty(self.nCells)
+    self.dy = np.empty(self.nCells)
 
-    self.cellNames = [None]*self.nC
+    self.cellNames = [None]*self.nCells
 
-    for instance in design['instances']:
+    for instance in spec['instances']:
       xloc   = instance['xloc']
       yloc   = instance['yloc']
       index  = instance['cell'] # For looking up dimensions of given cell type
@@ -69,10 +69,10 @@ class Design:
 
     # Netlist extraction
     conn = np.load(self.dir + '_connectivity.npz')
-    coo = coo_matrix((conn['data'], (conn['row'], conn['col'])), shape = conn['shape'])
+    coo  = coo_matrix((conn['data'], (conn['row'], conn['col'])), shape = conn['shape'])
     
-    self.netNames = [None]*self.nN
-    self.N        = [None]*self.nN
-    for j in range(self.nN):
-      self.netNames[j] = design['nets'][j]['name']
+    self.netNames = [None]*self.nNets
+    self.N        = [None]*self.nNets
+    for j in range(self.nNets):
+      self.netNames[j] = spec['nets'][j]['name']
       self.N[j] = coo.row[np.where(coo.col == j)]
