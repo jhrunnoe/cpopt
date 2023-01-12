@@ -1,19 +1,14 @@
 import numpy as np
 from design import Design
-from scipy.fft import idct, idst, dctn, idctn, dstn, idstn
+from scipy.fft import idct, idst, dctn, idctn
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 class Placer:
   # Specify the desired number of horizontal and vertical grid elements
-  ngx = 32
-  ngy = 32
-
-  DENS_IDX = 0
-  POTN_IDX = 1
-  FRCX_IDX = 2
-  FRCY_IDX = 3
+  ngx = 512
+  ngy = 512
 
   class Rect:
     def __init__(r, x, y, dx, dy):
@@ -33,9 +28,11 @@ class Placer:
     def __init__(c, placer, ID):
       super().__init__(placer.x[ID], placer.y[ID], placer.dx[ID], placer.dy[ID])
       c.placer = placer
-      c.px = c.cx # using midpoint as pin location for now
-      c.py = c.cy
       c.ID = ID
+      # using midpoint as pin location for now
+      c.px = c.cx 
+      c.py = c.cy
+      
     @property
     def pinx(c):
       return c.placer.x[c.ID] + 0.50*c.placer.dx[c.ID]
@@ -88,21 +85,15 @@ class Placer:
     for i in range(self.nNets):
       self.N[i] = self.Net(self, design.N[i])
 
+    ### Grid initialization:
     # Compute the width and height of the grid elements
     self.dgx = round(self.R.dx/self.ngx)
     self.dgy = round(self.R.dy/self.ngy)
-
-    # Grid initialization:
-    # Each element in the ngx-by-ngy grid has four associated quantities
-    # G[0, i, j] - density at (i, j) 
-    # G[1, i, j] - potential at (i, j)
-    # G[2, i, j] - field x component at (i, j)
-    # G[3, i, j] - field y component at (i, j)
-    self.G = np.empty((4, self.ngx, self.ngy))
-    self.density = np.empty((self.ngx, self.ngy))
-    self.potential = np.empty((self.ngx, self.ngy))
-    self.xForce = np.empty((self.ngx, self.ngy))
-    self.yForce = np.empty((self.ngx, self.ngy))
+    
+    # Each element in the ngx-by-ngy grid is associated with the electrostatic quatities: 
+    self.density   = np.empty((self.ngx, self.ngy))    # - The (charge) density rho(x, y)
+    self.potential = np.empty((self.ngx, self.ngy))    # - The electrostatic potential psi(x, y)
+    self.force     = np.empty((2, self.ngx, self.ngy)) # - The electrostatic force xi(x, y) = (xi_x(x, y), xi_y(x, y))
 
   def Overlap(self, r1, r2):
     ''' 
@@ -112,7 +103,10 @@ class Placer:
     dy = max(0, min(r1.y + r1.dy, r2.y + r2.dy) - max(r1.y, r2.y))
     return dx*dy
 
-  def Density(self):
+  def ComputeDensity(self):
+    '''
+      ComputeDensity() determines the density map based on the current placement
+    '''
     self.density.fill(0.0) 
 
     for c in range(self.nCells):
@@ -126,59 +120,48 @@ class Placer:
           self.density[i, j] += overlap/(self.dgx*self.dgy)
 
   
-  def FFT(self):
-    self.Density() # Compute the current density map
+  def ComputeES(self):
+    '''
+      ComputeES() computes the electrostatics of the system using discrete cosine and sine
+      transforms and their inverses. 
+    '''
+    self.ComputeDensity() # Compute the current density map
 
     # First the coefficients must be computed:
     # Define the frequencies for the trig bases
-    wu = (2*np.pi/self.ngx)*np.arange(self.ngx)
-    wv = (2*np.pi/self.ngy)*np.arange(self.ngy)
+    M, N = self.ngx, self.ngy
 
-    # The (u, v) entry of this matrix is w[u]^2 + w[v]^2
-    wu2_plus_wv2 = np.add.outer(np.square(wu), np.square(wv))
+    u = (np.pi/M)*(np.arange(M) + 0.50)
+    v = (np.pi/N)*(np.arange(N) + 0.50)
 
-    wu2_plus_wv2[0, 0] = 1.0 # To avoid division by zero
-    inv_wu2_plus_wv2 = 1.0/wu2_plus_wv2 
-    inv_wu2_plus_wv2[0, 0] = 0.0
+    C = dctn(self.density, type = 4) 
+    
+    SS = np.add.outer(np.square(u), np.square(v)) # (S)um of (S)quares
 
-    # This multiplies the u-th row by w[u]:
-    wu_by_wu2_plus_wv2 = np.multiply(inv_wu2_plus_wv2.T, wu).T
-    # This multiplies the v-th column by w[v]
-    wv_by_wu2_plus_wv2 = np.multiply(inv_wu2_plus_wv2, wv)
+    CbySS = np.divide(C, SS)
 
-    auv = dctn(self.density)
+    self.potential = idctn(CbySS, type = 4)
 
-    auv_wu_by_wu2_plus_wv2 = np.multiply(auv, wu_by_wu2_plus_wv2)
-    auv_wv_by_wu2_plus_wv2 = np.multiply(auv, wv_by_wu2_plus_wv2)
-    auv_by_wu2_plus_wv2    = np.multiply(auv, inv_wu2_plus_wv2)
+    CbySSu = np.multiply(CbySS.T, u).T
+    CbySSv = np.multiply(CbySS, v)
 
-    self.potential = idctn(auv_by_wu2_plus_wv2)
-    self.energy = np.multiply(self.potential, self.density).sum()
+    self.force[0, :] = idst(idct(CbySSu, type = 4), type = 4, axis = 0)
+    self.force[1, :] = idct(idst(CbySSv, type = 4), type = 4, axis = 0)
 
-    a = idct(auv_wu_by_wu2_plus_wv2)
-    self.xForce = idst(a, axis = 0)
-    b = idst(auv_wv_by_wu2_plus_wv2)
-    self.yForce = idct(b, axis = 0)      
-
-    X, Y = np.meshgrid(np.arange(self.ngx), np.arange(self.ngy), indexing='ij')
-
+    X, Y = np.meshgrid(np.arange(M), np.arange(N), indexing='ij')
     fig, axes = plt.subplots(2, 2)
     axes[0, 0].pcolormesh(X, Y, self.density)
     axes[0, 1].pcolormesh(X, Y, self.potential)
-    axes[0, 1].quiver(X, Y, self.xForce, self.yForce)
-    axes[1, 0].pcolormesh(X, Y, self.xForce)
-    axes[1, 1].pcolormesh(X, Y, self.yForce)
+    axes[0, 1].quiver(X, Y, self.force[0, :], self.force[1, :])
+    axes[1, 0].pcolormesh(X, Y, self.force[0, :])
+    axes[1, 1].pcolormesh(X, Y, self.force[1, :])
     plt.tight_layout()
+    plt.show()           
+      
+    self.energy = np.multiply(self.potential, self.density).sum()
 
-    # plt.xlim([- 0.05*self.R.dx, 1.05*self.R.dx])
-    # plt.ylim([- 0.05*self.R.dy, 1.05*self.R.dy])
-    # for i in range(self.nCells):
-    #   axes[0, 0].add_patch(Rectangle((self.x[i], self.y[i]), self.dx[i], self.dy[i],
-    #                      edgecolor = 'r',
-    #                      linewidth = 1,
-    #                      facecolor = 'none'))
     fig, ax = plt.subplots()
-    ax.contour(X, Y, self.potential, 20)
-    ax.quiver(X, Y, self.xForce, self.yForce)
+    ax.contour(X, Y, self.potential, 30)
+    ax.quiver(X, Y, self.force[0, :], self.force[1, :])
     plt.tight_layout()
     plt.show()
