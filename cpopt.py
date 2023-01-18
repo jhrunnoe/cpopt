@@ -1,8 +1,14 @@
-import core
+from Placer import Placer
 
 def main():
-  placer = core.Placer('xbar')
+  placer = Placer('xbar')
+  placer.ComputeDensity() # Compute the current density map
   placer.ComputeES()
+  placer.PlotHeatmap()
+  placer.PlotContour()
+  placer.PlotSurface()
+
+  1
   
 if __name__ == "__main__":
   main()
