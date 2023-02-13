@@ -1,14 +1,13 @@
 from Placer import Placer
+import numpy as np
+from Design import Design
+import time
+import matplotlib.pyplot as plt
 
 def main():
-  placer = Placer('xbar')
-  placer.ComputeDensity() # Compute the current density map
-  placer.ComputeES()
-  placer.PlotHeatmap()
-  placer.PlotContour()
-  placer.PlotSurface()
+  placer = Placer('counter')
 
-  1
+  placer.run_optimization()
   
 if __name__ == "__main__":
   main()
