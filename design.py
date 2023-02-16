@@ -22,6 +22,7 @@ class Design:
       - n_nets  : The number of nets in the netlist
       - (x0, y0): Initial (x, y)-coordinates of all instances
       - (dx, dy): Physical dimensions of all instances
+      - (px, py): Pin coordinates as offsets relative to the anchor point
       Each cell has the following geometry:
        (x, y+dy)+------------------------+(x+dx, y+dy)
                 |                        |
@@ -118,7 +119,8 @@ class Design:
         self.py[i] = py
         self.cell_names[i] = instance['name'] 
 
-      self.R = {'x': 0, 'y': 0, 'dx': 1.25*self.x0.max().round(), 'dy': 1.25*self.y0.max().round()}
+      self.R = {'x': 0,                                       'y': 0, 
+               'dx': 1.01*(self.x0 + self.dx).max().round(), 'dy': 1.01*(self.y0 + self.dy).max().round()}
 
       # Netlist extraction
       conn = np.load(self.dir + self.name + '_connectivity.npz')

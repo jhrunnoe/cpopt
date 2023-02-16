@@ -31,6 +31,9 @@ class Placer:
     self.grid['dy']   = np.ceil(self.design.R['dy']/self.grid['ny'])
     self.grid['dxdy'] = self.grid['dx']*self.grid['dy']
 
+    self.trace = {      'W': [],       'E': [],       'f': [], 
+                  'norm_dW': [], 'norm_dE': [], 'norm_df': []}
+
     # electrostatic quatities: 
     self.charge    = np.multiply(self.design.dx, self.design.dy)          # cell charge vector
     self.density   = np.empty((self.grid['nx'], self.grid['ny']))         # charge density map
@@ -102,16 +105,22 @@ class Placer:
     dW =  np.concatenate((dWx, dWy))
     dE = -np.concatenate((force['x'], force['y'])) # Note that the force is the negative of the gradient
 
-    f =  W + self.mu*E
-    g = dW + self.mu*dE
-    self.plot_heatmap(P)
-    self.plot_cells(x, y, "all")
-    return (f, g)
+    f  =  W + self.mu*E
+    df = dW + self.mu*dE
+
+    self.trace['W'].append(W)
+    self.trace['E'].append(E)
+    self.trace['f'].append(f)
+    self.trace['norm_dW'].append(np.linalg.norm(dW, ord=2))
+    self.trace['norm_dE'].append(np.linalg.norm(dE, ord=2))
+    self.trace['norm_df'].append(np.linalg.norm(df, ord=2))
+    return (f, df)
 
   def run_optimization(self):
     # z0     = np.concatenate((self.design.x0, self.design.y0))
     z0     = self.sqzz
     lz     = np.concatenate((self.grid['dx']*np.ones_like(self.design.x0), self.grid['dy']*np.ones_like(self.design.y0)))
+    lz     = np.zeros_like(z0)
     uz     = np.concatenate((self.design.R['dx'] - (self.design.dx), self.design.R['dy'] - (self.design.dy)))
 
     result = minimize(self.evaluate, z0, method='Trust-constr', jac=True,  bounds=Bounds(lz, uz, keep_feasible=True), options={'disp': True, 'maxiter':3000})
