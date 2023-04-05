@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 def main():
   placer = Placer('counter')
 
-  placer.run_optimization()
+  placer.run()
   
 if __name__ == "__main__":
   main()

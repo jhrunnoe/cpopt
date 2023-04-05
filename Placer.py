@@ -12,12 +12,13 @@ import scipy.sparse
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from Design import Design
+np.set_printoptions(edgeitems=30, linewidth=100000)
 
 class Placer:
-  mu  = 2
+  mu  = 1
   target_density = 1
   smoothing_param = 256
-  grid_dim = 256
+  grid_dim = 512
 
   def __init__(self, name):
     self.design = Design(name)
@@ -31,23 +32,35 @@ class Placer:
     self.grid['dy']   = np.ceil(self.design.R['dy']/self.grid['ny'])
     self.grid['dxdy'] = self.grid['dx']*self.grid['dy']
 
-    self.trace = {      'W': [],       'E': [],       'f': [], 
-                  'norm_dW': [], 'norm_dE': [], 'norm_df': []}
+    # The number of grid elements each cell occupies horizontally/vertically (not exact)
+    self.dgx = np.ceil(np.divide(self.design.dx, self.grid['dx'])) 
+    self.dgy = np.ceil(np.divide(self.design.dy, self.grid['dy'])) 
 
     # electrostatic quatities: 
-    self.charge    = np.multiply(self.design.dx, self.design.dy)          # cell charge vector
-    self.density   = np.empty((self.grid['nx'], self.grid['ny']))         # charge density map
+    self.charge    = np.multiply(self.design.dx, self.design.dy)          # cell charge (area) vector
+    [self.density, self.masks] = self.compute_density(self.design.x0, self.design.y0) # charge density map
+           
     self.potential = np.empty((self.grid['nx'], self.grid['ny']))         # electrostatic potential map
     self.field     = {'x': np.empty((self.grid['nx'], self.grid['ny'])),  # electrostatic x & y field maps
                       'y': np.empty((self.grid['nx'], self.grid['ny']))} 
-
+    
+    self.trace = {      'W': [],       'E': [],       'f': [], 
+                  'norm_dW': [], 'norm_dE': [], 'norm_df': []}
+    
     # convenience definitions
     self.xind = range(self.design.n_cells)
     self.yind = range(self.design.n_cells, 2*self.design.n_cells)
+    self.z0   = np.concatenate((self.design.x0, self.design.y0))
     self.sqzx = self.design.x0 + 0.50*(0.50*self.design.dx - self.design.x0)
     self.sqzy = self.design.y0 + 0.50*(0.50*self.design.dy - self.design.y0)
     self.sqzz = np.append(self.sqzx, self.sqzy)
+
     self.design.dz = np.append(self.design.dx, self.design.dy)
+    self.zk   =np.zeros_like(self.z0) 
+
+    # bound constraints
+    self.lz = np.zeros_like(self.z0)
+    self.uz = np.concatenate((self.design.R['dx'] - self.design.dx, self.design.R['dy'] - self.design.dy))
 
   def net_WAWL(self, x, y, cellIDs):
     '''
@@ -70,22 +83,75 @@ class Placer:
     dWy = dSymax - dSymin
     return (W, dWx, dWy)
 
+  def callback(self, zk, state):
+    dzk = zk - self.zk
+    self.zk = zk
+    
+
+  def run(self):
+    z = self.z0
+    [f, df] = self.evaluate(z)
+    for k in range(10):
+      
+      p = -df
+      
+      if any(p < 0):
+        stepm = np.divide((z[p < 0] - self.lz[p < 0]), -p[p < 0]).min()
+      else:
+        stepm = self.design.R['dx']
+      
+      if any(p > 0):
+        stepp = np.divide((self.uz[p > 0] - z[p > 0]),  p[p > 0]).min()
+      else:
+        stepp = self.design.R['dx']
+      
+      stepmax = min(stepm, stepp)
+
+      step= stepmax
+      while(1):
+        znew = z + step*p
+        [fnew, dfnew] = self.evaluate(znew)
+        if fnew < f:
+          break
+        else:
+          step *= 0.5
+
+      z = znew
+      f = fnew
+      df = dfnew
+      # self.callback(z, 0)
+            
   def evaluate(self, z):
     x = z[self.xind]
     y = z[self.yind]
 
-    [D, M]    = self.compute_density(x, y)
-    [P, F, E] = self.compute_electrostatics(D.toarray())
+
+    [self.density, self.masks] = self.update_density(x, y, range(self.design.n_cells), self.density, self.masks)
+
+    # relative_density = np.maximum(np.zeros_like(D), D - self.target_density*np.ones_like(D)) # Density relative to target
+    
+    [P, F, E] = self.compute_electrostatics(self.density.todense())
 
     # Determine the grid element(s) in which each cell locates, extract the
     # electric field at those locations, and scale by the cell charges (area). 
     force = {'x': np.zeros_like(x), 'y': np.zeros_like(y)}
+    
+    I = np.floor(x/self.dgx).astype(int)
+    J = np.floor(y/self.dgy).astype(int)
 
-    for k in range(self.design.n_cells):
-      [I, J] = M[k].nonzero()
-      force['x'][k] = np.multiply(F['x'][I, J], M[k][I, J]).sum()
-      force['y'][k] = np.multiply(F['y'][I, J], M[k][I, J]).sum()
-      
+    force['x'] = np.multiply(F['x'][I, J], self.charge)
+    force['y'] = np.multiply(F['y'][I, J], self.charge)
+
+    # self.plot_heatmap(P)
+    # self.plot_cells(x, y)
+    # plt.quiver(self.dgx*I, self.dgy*J, force['x'], force['y'])
+    # for k in range(self.design.n_cells):
+      # [I, J] = self.masks[k].nonzero()
+      # force['x'][k] = np.multiply(F['x'][I, J], M[k][I, J]).sum()
+      # force['y'][k] = np.multiply(F['y'][I, J], M[k][I, J]).sum()
+      # force['x'][k] = F['x'][I, J].sum()
+      # force['y'][k] = F['y'][I, J].sum()
+
     W    = 0.0
     dWx  = np.zeros_like(x)
     dWy  = np.zeros_like(y)
@@ -96,17 +162,14 @@ class Placer:
       W += net_wawl
       dWx[cellIDs] += net_dWx
       dWy[cellIDs] += net_dWy
-
-      # plt.axis([0, self.design.R['dx'], 0, self.design.R['dy']])
-      # self.plot_heatmap(P)
-      # self.plot_cells(x, y, cellIDs)
-      # plt.quiver(x[cellIDs] + self.design.px[cellIDs], y[cellIDs]+self.design.py[cellIDs], -net_dWx, -net_dWy) 
     
     dW =  np.concatenate((dWx, dWy))
     dE = -np.concatenate((force['x'], force['y'])) # Note that the force is the negative of the gradient
 
-    f  =  W + self.mu*E
-    df = dW + self.mu*dE
+    # f  =  W + self.mu*E
+    # df = dW + self.mu*E
+    f = E
+    df = dE
 
     self.trace['W'].append(W)
     self.trace['E'].append(E)
@@ -116,55 +179,97 @@ class Placer:
     self.trace['norm_df'].append(np.linalg.norm(df, ord=2))
     return (f, df)
 
-  def run_optimization(self):
-    # z0     = np.concatenate((self.design.x0, self.design.y0))
-    z0     = self.sqzz
-    lz     = np.concatenate((self.grid['dx']*np.ones_like(self.design.x0), self.grid['dy']*np.ones_like(self.design.y0)))
+  def solve(self):
+    z0     = self.z0
+    # z0     = self.sqzz
     lz     = np.zeros_like(z0)
-    uz     = np.concatenate((self.design.R['dx'] - (self.design.dx), self.design.R['dy'] - (self.design.dy)))
+    uz     = np.concatenate((self.design.R['dx'] - self.design.dx, self.design.R['dy'] - self.design.dy))
 
-    result = minimize(self.evaluate, z0, method='Trust-constr', jac=True,  bounds=Bounds(lz, uz, keep_feasible=True), options={'disp': True, 'maxiter':3000})
+    result = minimize(fun=self.evaluate, x0=z0, method='Trust-constr', jac=True,  callback=self.callback, bounds=Bounds(lz, uz, keep_feasible=True), options={'disp': True, 'maxiter':100000})
     return result
 
+  def update_density(self, x, y, cells, D, M):
+    '''
+    @brief: Update the density map by subtracting, shifting, and adding density masks of provided cells
+    '''
+    for k in cells:
+      di = int(np.floor(x[k]/self.grid['dx'])) - M[k].nonzero()[0][0] # Change in row index
+      dj = int(np.floor(y[k]/self.grid['dy'])) - M[k].nonzero()[1][0] # Change in column index
+
+      if di != 0 or dj != 0: 
+        D = D._add_sparse(-M[k]) # Subtract out this cells previous density contribution
+        
+        indices = M[k].indices + dj # Shift column indices 
+          # M[k].indices += dj
+    
+        # Shift row index pointers (in CSR format)
+        # For example,
+        # shift   up 3 rows:  [0, 0, 0, 0, 4, 9, 13, 18, 18, 18, 18, 18] -> [0, 4, 9, 13, 18, 18, 18, 18, 18, 18, 18, 18]
+        # shift down 2 rows:  [0, 0, 0, 0, 4, 9, 13, 18, 18, 18, 18, 18] -> [0, 0, 0,  0,  0,  0,  4,  9, 13, 18, 18, 18]
+        if di > 0:
+          pointers = np.concatenate((np.zeros(di), M[k].indptr[:-di])).astype(int)
+          # M[k].indptr = np.concatenate((np.zeros(di), M[k].indptr[:-di])).astype(int)   
+        elif di < 0: 
+          # M[k].indptr = np.concatenate((M[k].indptr[abs(di):], M[k].nnz*np.ones(abs(di)))).astype(int)
+          pointers = np.concatenate((M[k].indptr[abs(di):], M[k].nnz*np.ones(abs(di)))).astype(int)
+        else: 
+          pointers = M[k].indptr
+        
+        M[k] = scipy.sparse.csr_matrix((M[k].data, indices, pointers), shape=(self.grid['nx'], self.grid['ny']))
+
+        D = D._add_sparse(M[k])
+    return (D, M)
+
   def compute_density(self, x, y):
-    '''
-    @brief   : computation of the cell density map based on the current placement
-    @param x : current placement x-coordinates
-    @param y : current placement y-coordinates
-    '''
     D = scipy.sparse.csr_matrix((self.grid['nx'], self.grid['ny']))
     M = [None]*self.design.n_cells
-
     for k in range(self.design.n_cells):
       li = int(np.floor(x[k]/self.grid['dx']))
       lj = int(np.floor(y[k]/self.grid['dy']))
-      ui = int(np.floor((x[k] + self.design.dx[k])/self.grid['dx']))
-      uj = int(np.floor((y[k] + self.design.dy[k])/self.grid['dy']))
-      
-      di = ui - li
-      dj = uj - lj      
-      block = np.zeros((di + 1, dj + 1))      
-
-      # Width and height of partial overlaps
-      ldx = min((li + 1)*self.grid['dx'] - x[k], self.design.dx[k])          # lower horizontal
-      ldy = min((lj + 1)*self.grid['dy'] - y[k], self.design.dy[k])          # lower vertical
-      udx = (x[k] + self.design.dx[k]) - ui*self.grid['dx'] if di > 0 else 0 # upper horizontal
-      udy = (y[k] + self.design.dy[k]) - uj*self.grid['dy'] if dj > 0 else 0 # upper vertical
-
-      block[0,     0]   += ldx*ldy/self.grid['dxdy'] # lower left 
-      block[0,    dj]   += ldx*udy/self.grid['dxdy'] # upper left 
-      block[di,    0]   += udx*ldy/self.grid['dxdy'] # lower right
-      block[di,   dj]   += udx*udy/self.grid['dxdy'] # upper right
-      block[1:di,  0]   += ldy/self.grid['dy']       # lower horizontal strip
-      block[0,  1:dj]   += ldx/self.grid['dx']       # left vertical strip
-      block[di, 1:dj]   += udx/self.grid['dx']       # right vertical strip
-      block[1:di, dj]   += udy/self.grid['dy']       # upper horizontal strip
-      block[1:di, 1:dj] += 1.0                       # interior
-
-      [X, Y] = np.meshgrid(np.arange(li, ui + 1), np.arange(lj, uj + 1), indexing='ij')
-      M[k] = scipy.sparse.csr_matrix((block.ravel(), (X.ravel(), Y.ravel())), shape=(self.grid['nx'], self.grid['ny']))
+      [X, Y] = np.meshgrid(np.arange(li, li + self.dgx[k]), np.arange(lj, lj + self.dgy[k]), indexing='ij')
+      M[k] = scipy.sparse.csr_matrix((np.ones(int(self.dgx[k]*self.dgy[k])).ravel(), (X.ravel(), Y.ravel())), shape=(self.grid['nx'], self.grid['ny']))
       D = D._add_sparse(M[k])
     return (D, M)
+
+  # def compute_density(self, x, y):
+  #   '''
+  #   @brief   : computation of the cell density map based on the current placement
+  #   @param x : current placement x-coordinates
+  #   @param y : current placement y-coordinates
+  #   '''
+  #   D = scipy.sparse.csr_matrix((self.grid['nx'], self.grid['ny']))
+  #   M = [None]*self.design.n_cells
+
+  #   for k in range(self.design.n_cells):
+  #     li = int(np.floor(x[k]/self.grid['dx']))
+  #     lj = int(np.floor(y[k]/self.grid['dy']))
+  #     ui = int(np.floor((x[k] + self.design.dx[k])/self.grid['dx']))
+  #     uj = int(np.floor((y[k] + self.design.dy[k])/self.grid['dy']))
+      
+  #     di = ui - li
+  #     dj = uj - lj      
+  #     block = np.zeros((di + 1, dj + 1))      
+
+  #     # Width and height of partial overlaps
+  #     ldx = min((li + 1)*self.grid['dx'] - x[k], self.design.dx[k])          # lower horizontal
+  #     ldy = min((lj + 1)*self.grid['dy'] - y[k], self.design.dy[k])          # lower vertical
+  #     udx = (x[k] + self.design.dx[k]) - ui*self.grid['dx'] if di > 0 else 0 # upper horizontal
+  #     udy = (y[k] + self.design.dy[k]) - uj*self.grid['dy'] if dj > 0 else 0 # upper vertical
+
+  #     block[0,     0]   += ldx*ldy/self.grid['dxdy'] # lower left 
+  #     block[0,    dj]   += ldx*udy/self.grid['dxdy'] # upper left 
+  #     block[di,    0]   += udx*ldy/self.grid['dxdy'] # lower right
+  #     block[di,   dj]   += udx*udy/self.grid['dxdy'] # upper right
+  #     block[1:di,  0]   += ldy/self.grid['dy']       # lower horizontal strip
+  #     block[0,  1:dj]   += ldx/self.grid['dx']       # left vertical strip
+  #     block[di, 1:dj]   += udx/self.grid['dx']       # right vertical strip
+  #     block[1:di, dj]   += udy/self.grid['dy']       # upper horizontal strip
+  #     block[1:di, 1:dj] += 1.0                       # interior
+
+  #     [X, Y] = np.meshgrid(np.arange(li, ui + 1), np.arange(lj, uj + 1), indexing='ij')
+  #     M[k] = scipy.sparse.csr_matrix((block.ravel(), (X.ravel(), Y.ravel())), shape=(self.grid['nx'], self.grid['ny']))
+  #     D = D._add_sparse(M[k])
+  #   return (D, M)
 
   def compute_electrostatics(self, D):
     '''
@@ -195,7 +300,7 @@ class Placer:
      
     # Differentiating the potential map with respect to y gives the vertical
     # component of the electrostatic field. This is done by multiplying the
-    # columns of C by elements of v.
+    # indices of C by elements of v.
     Cv = np.multiply(C, v)
     F['y'] = idct(idst(np.hstack((Cv[:, 1:], np.zeros([self.grid['nx'], 1]))), axis=1, norm="ortho"), axis=0, norm="ortho")
 
@@ -211,7 +316,8 @@ class Placer:
 
   def plot_heatmap(self, Z):
     X, Y = np.meshgrid(self.grid['dx']*np.arange(Z.shape[0]), self.grid['dy']*np.arange(Z.shape[1]), indexing='ij')
-    plt.gca().pcolormesh(X, Y, Z)
+    hm = plt.gca().pcolormesh(X, Y, Z)
+    plt.colorbar(hm)
 
 
   def plot_contour(self, Z):

@@ -36,7 +36,7 @@ class Design:
     self.name = name
     self.path = os.path.dirname(os.path.abspath(__file__))
     self.design_path = self.path + '/NCSU-DigIC-GraphData-2022-10-15/'
-    # self.design_path = self.path +'/RosettaStone-GraphData-2023-01-21/'
+    # self.design_path = self.path +'/RosettaStone-GraphData-2023-02-27/'
  
     self.dir  = self.design_path + self.name + '/'
     self.file_name = self.name + '_design_data'
@@ -119,8 +119,8 @@ class Design:
         self.py[i] = py
         self.cell_names[i] = instance['name'] 
 
-      self.R = {'x': 0,                                       'y': 0, 
-               'dx': 1.01*(self.x0 + self.dx).max().round(), 'dy': 1.01*(self.y0 + self.dy).max().round()}
+      self.R = {'x': 0,                                         'y': 0, 
+               'dx': (1.05*(self.x0 + self.dx).max()).round(), 'dy': (1.05*(self.y0 + self.dy).max()).round()}
 
       # Netlist extraction
       conn = np.load(self.dir + self.name + '_connectivity.npz')
