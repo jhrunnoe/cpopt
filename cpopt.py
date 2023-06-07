@@ -6,8 +6,7 @@ import matplotlib.pyplot as plt
 
 def main():
   placer = Placer('counter')
-
-  placer.run()
+  placer.evaluate(placer.design.z0)
   
 if __name__ == "__main__":
   main()

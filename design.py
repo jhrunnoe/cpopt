@@ -20,23 +20,24 @@ class Design:
       - netlist : Netlist that defines instance connectivity
       - n_cells : The number of cells (instances)
       - n_nets  : The number of nets in the netlist
-      - (x0, y0): Initial (x, y)-coordinates of all instances
+      - (x0, y0): Initial (x, y)-coordinates of the center of all instances
       - (dx, dy): Physical dimensions of all instances
-      - (px, py): Pin coordinates as offsets relative to the anchor point
+      - (px, py): Pin coordinates as offsets relative to the anchor point (can be negative)
       Each cell has the following geometry:
-       (x, y+dy)+------------------------+(x+dx, y+dy)
-                |                        |
-                +----@<-(x+px, y+py)     |
-                |    |                   |
-                |    |                   |
-                |    |                   |
-           (x,y)+----+-------------------+(x+dx, y)
+       (x-dy/2, y+dy/2)+------------+-----------+(x+dx/2, y+dy/2)
+                      |             |           |
+                      |             |           |
+                      +-----------(x,y)--+------+
+                      |             |    |      |
+                      |             |    |      |
+       (x-dy/2,y-dy/2)+-------------+----@------+(x+dx/2, y-dy/2)
+                                    (x+px,y+py)
       '''
   def __init__(self, name):
     self.name = name
     self.path = os.path.dirname(os.path.abspath(__file__))
     self.design_path = self.path + '/NCSU-DigIC-GraphData-2022-10-15/'
-    # self.design_path = self.path +'/RosettaStone-GraphData-2023-02-27/'
+    # self.design_path = self.path +'/RosettaStone-GraphData-2023-05-23/'
  
     self.dir  = self.design_path + self.name + '/'
     self.file_name = self.name + '_design_data'
@@ -111,16 +112,19 @@ class Design:
         if orient in [2, 3, 5, 6]:
           yloc -= dy # lower y coordinate after rotation/reflection
 
-        self.x0[i] = xloc
-        self.y0[i] = yloc
+        self.x0[i] = xloc + 0.50*dx
+        self.y0[i] = yloc + 0.50*dy
         self.dx[i] = dx
         self.dy[i] = dy
-        self.px[i] = px
-        self.py[i] = py
+        self.px[i] = px - 0.50*dx
+        self.py[i] = py - 0.50*dy
         self.cell_names[i] = instance['name'] 
 
-      self.R = {'x': 0,                                         'y': 0, 
-               'dx': (1.05*(self.x0 + self.dx).max()).round(), 'dy': (1.05*(self.y0 + self.dy).max()).round()}
+      self.R = dict.fromkeys(['x', 'y', 'dx', 'dy'])
+      self.R['dx'] = (1.10*(self.x0 + 0.50*self.dx).max()).round()
+      self.R['dy'] = (1.10*(self.y0 + 0.50*self.dy).max()).round()
+      self.R['x']  = 0.50*self.R['dx']
+      self.R['y']  = 0.50*self.R['dy']
 
       # Netlist extraction
       conn = np.load(self.dir + self.name + '_connectivity.npz')
