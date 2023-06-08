@@ -19,7 +19,7 @@ class Placer:
   target_density = 2
   smoothing_param = 256
   resolution = 512
-  pad_factor = 0.1
+  pad_factor = 0.10
   exact = False
 
   def __init__(self, name):
@@ -29,16 +29,25 @@ class Placer:
     min_dim = min(self.design.R['dx'], self.design.R['dy'])
     self.grid = dict()
     self.grid['n']   = {'x': int(np.ceil(self.resolution*self.design.R['dx']/min_dim)), 
-                        'y': int(np.ceil(self.resolution*self.design.R['dx']/min_dim))}
+                        'y': int(np.ceil(self.resolution*self.design.R['dy']/min_dim))}
     self.grid['pad'] = {'x': int(np.ceil(self.pad_factor*self.grid['n']['x'])),
                         'y': int(np.ceil(self.pad_factor*self.grid['n']['y']))}
     self.grid['all'] = {'x': self.grid['n']['x'] + 2*self.grid['pad']['x'],
                         'y': self.grid['n']['y'] + 2*self.grid['pad']['y']}    
     
+    self.iofx = lambda x: x + self.grid['pad']['x']
+    self.jofy = lambda y: y + self.grid['pad']['y']
+    self.xofi = lambda i: i - self.grid['pad']['x']
+    self.yofj = lambda j: j - self.grid['pad']['y']
+
     # Rescale the design so that the grid elements are 1x1
     self.scale = {'x': self.grid['n']['x']/self.design.R['dx'],
                   'y': self.grid['n']['y']/self.design.R['dy']}
     
+    self.design.R['x']  *= self.scale['x']
+    self.design.R['y']  *= self.scale['y']
+    self.design.R['dx'] *= self.scale['x']
+    self.design.R['dy'] *= self.scale['y']
     self.design.x0 *= self.scale['x']
     self.design.y0 *= self.scale['y']
     self.design.z0 = np.concatenate((self.design.x0, self.design.y0))
@@ -70,7 +79,6 @@ class Placer:
 
     # electrostatic quatities: 
     (self.density, self.masks) = self.compute_density(self.design.x0, self.design.y0) # charge density map
-    self.charge    = np.multiply(self.design.dx, self.design.dy)                      # cell charge (area) vector
     self.potential = np.empty((self.grid['all']['x'], self.grid['all']['y']))         # electrostatic potential map
     self.field     = {'x': np.empty((self.grid['all']['x'], self.grid['all']['y'])),  # electrostatic x & y component field maps
                       'y': np.empty((self.grid['all']['x'], self.grid['all']['y']))} 
@@ -115,8 +123,8 @@ class Placer:
     @brief: Update the density map by subtracting, shifting, and adding density masks of provided cells
     '''
     for k in cells:
-      di = int(np.floor(x[k])) - M[k].nonzero()[0][0] # Change in row index
-      dj = int(np.floor(y[k])) - M[k].nonzero()[1][0] # Change in column index
+      di = int(np.floor(self.iofx(x[k]))) - M[k].nonzero()[0][0] # Change in row index
+      dj = int(np.floor(self.jofy(y[k]))) - M[k].nonzero()[1][0] # Change in column index
 
       if di != 0 or dj != 0: 
         D = D._add_sparse(-M[k]) # Subtract out this cells previous density contribution
@@ -150,36 +158,36 @@ class Placer:
     M = [None]*self.design.n_cells
 
     for k in range(self.design.n_cells):
-      li = int(np.floor(x[k] - self.half_dx[k]))
-      lj = int(np.floor(y[k] - self.half_dy[k]))
-      ui = int(np.floor(x[k] + self.half_dx[k]))
-      uj = int(np.floor(y[k] + self.half_dy[k]))
-      di = ui - li
-      dj = uj - lj
+      lx = int(np.floor(x[k] - self.half_dx[k]))
+      ly = int(np.floor(y[k] - self.half_dy[k]))
+      ux = int(np.floor(x[k] + self.half_dx[k]))
+      uy = int(np.floor(y[k] + self.half_dy[k]))
+      dx_k = ux - lx
+      dy_k = uy - ly
 
       if self.exact:
-        block = np.zeros((di + 1, dj + 1))      
+        block = np.zeros((dx_k + 1, dy_k + 1))      
 
         # Width and height of partial overlaps
-        ldx = min((li + 1) - (x[k] - self.half_dx[k]), self.design.dx[k]) # lower horizontal
-        ldy = min((lj + 1) - (y[k] - self.half_dy[k]), self.design.dy[k]) # lower vertical
-        udx = (x[k] + self.half_dx[k]) - ui if di > 0 else 0 # upper horizontal
-        udy = (y[k] + self.half_dy[k]) - uj if dj > 0 else 0 # upper vertical
+        ldx = min((lx + 1) - (x[k] - self.half_dx[k]), self.design.dx[k]) # lower horizontal
+        ldy = min((ly + 1) - (y[k] - self.half_dy[k]), self.design.dy[k]) # lower vertical
+        udx = (x[k] + self.half_dx[k]) - ux if dx_k > 0 else 0 # upper horizontal
+        udy = (y[k] + self.half_dy[k]) - uy if dy_k > 0 else 0 # upper vertical
 
-        block[0,     0]   += ldx*ldy # lower left 
-        block[0,    dj]   += ldx*udy # upper left 
-        block[di,    0]   += udx*ldy # lower right
-        block[di,   dj]   += udx*udy # upper right
-        block[1:di,  0]   += ldy     # lower horizontal strip
-        block[0,  1:dj]   += ldx     # left vertical strip
-        block[di, 1:dj]   += udx     # right vertical strip
-        block[1:di, dj]   += udy     # upper horizontal strip
-        block[1:di, 1:dj] += 1.0     # interior
+        block[0,           0] += ldx*ldy # lower left 
+        block[0,        dy_k] += ldx*udy # upper left 
+        block[  dx_k,      0] += udx*ldy # lower right
+        block[  dx_k,   dy_k] += udx*udy # upper right
+        block[1:dx_k,      0] += ldy     # lower horizontal strip
+        block[0,      1:dy_k] += ldx     # left vertical strip
+        block[  dx_k, 1:dy_k] += udx     # right vertical strip
+        block[1:dx_k,   dy_k] += udy     # upper horizontal strip
+        block[1:dx_k, 1:dy_k] += 1.0     # interior
       else:
-        block = np.ones((di + 1, dj + 1))
+        block = np.ones((dx_k + 1, dy_k + 1))
 
-      [X, Y] = np.meshgrid(self.grid['pad']['x'] + np.arange(li, ui + 1), self.grid['pad']['y'] + np.arange(lj, uj + 1), indexing='ij')
-      M[k]   = scipy.sparse.csr_matrix((block.ravel(), (X.ravel(), Y.ravel())), shape=(self.grid['all']['x'], self.grid['all']['y']))
+      [I, J] = np.meshgrid(self.iofx(np.arange(lx, ux + 1)), self.jofy(np.arange(ly, uy + 1)), indexing='ij')
+      M[k]   = scipy.sparse.csr_matrix((block.ravel(), (I.ravel(), J.ravel())), shape=(self.grid['all']['x'], self.grid['all']['y']))
       D      = D._add_sparse(M[k])
     D.data = np.maximum(D.data - self.target_density, 0)
     return(D, M)
@@ -227,33 +235,48 @@ class Placer:
     return(P, F, E)
 
   def plot_cells(self, x, y, cells="all"):
+    plt.xlim(-1.25*self.grid['pad']['x'], self.grid['n']['x'] + 1.25*self.grid['pad']['x'])
+    plt.ylim(-1.25*self.grid['pad']['y'], self.grid['n']['y'] + 1.25*self.grid['pad']['y'])
+    plt.axhline(0, color='black', linewidth=.5)
+    plt.axvline(0, color='black', linewidth=.5)
+
     if cells == "all":
       cells = range(self.design.n_cells)
 
-    for i in cells:
-      plt.gca().add_patch(Rectangle((self.grid['pad']['x'] + x[i] - self.half_dx[i], 
-                                     self.grid['pad']['y'] + y[i] - self.half_dy[i]), 
-                                     self.design.dx[i], 
-                                     self.design.dy[i], 
-                                     edgecolor='black', 
-                                     facecolor='none', 
-                                     lw=1.0, 
-                                     alpha=1.0))
+    # Show the entire padded region
+    plt.gca().add_patch(Rectangle((-self.grid['pad']['x'], -self.grid['pad']['y']), 
+                                    self.grid['n']['x'] + 2*self.grid['pad']['x'],
+                                    self.grid['n']['y'] + 2*self.grid['pad']['y'],
+                                    edgecolor='red', facecolor='none', alpha=1, lw=1))
+    
+    # Show the actual placement region
+    plt.gca().add_patch(Rectangle((0, 0), self.design.R['dx'], self.design.R['dy'], 
+                                   edgecolor='green', facecolor=[0, 1, 0, .05], ls='--'))
 
-  @staticmethod
-  def plot_heatmap(Z):
-    X, Y = np.meshgrid(np.arange(Z.shape[0]), np.arange(Z.shape[1]), indexing='ij')
+    for i in cells:
+      plt.gca().add_patch(Rectangle((x[i] - self.half_dx[i], y[i] - self.half_dy[i]), 
+                                     self.design.dx[i], self.design.dy[i], 
+                                     edgecolor='black', facecolor='none', alpha=1))
+
+  def plot_heatmap(self, Z):
+    plt.xlim(-1.25*self.grid['pad']['x'], self.grid['n']['x'] + 1.25*self.grid['pad']['x'])
+    plt.ylim(-1.25*self.grid['pad']['y'], self.grid['n']['y'] + 1.25*self.grid['pad']['y'])
+    plt.axhline(0, color='black', linewidth=.5)
+    plt.axvline(0, color='black', linewidth=.5)
+    X, Y = np.meshgrid(self.xofi(np.arange(Z.shape[0])), self.yofj(np.arange(Z.shape[1])), indexing='ij')
     hm = plt.gca().pcolormesh(X, Y, Z)
     plt.colorbar(hm)
 
-  @staticmethod
-  def plot_contour(Z):
-    X, Y = np.meshgrid(np.arange(Z.shape[0]), np.arange(Z.shape[1]), indexing='ij')
+  def plot_contour(self, Z):
+    plt.xlim(-1.25*self.grid['pad']['x'], self.grid['n']['x'] + 1.25*self.grid['pad']['x'])
+    plt.ylim(-1.25*self.grid['pad']['y'], self.grid['n']['y'] + 1.25*self.grid['pad']['y'])
+    plt.axhline(0, color='black', linewidth=.5)
+    plt.axvline(0, color='black', linewidth=.5)
+    X, Y = np.meshgrid(self.xofi(np.arange(Z.shape[0])), self.yofj(np.arange(Z.shape[1])), indexing='ij')
     plt.gca().contour(X, Y, Z, 30)
 
-  @staticmethod
-  def plot_surface(Z):
-    X, Y = np.meshgrid(np.arange(Z.shape[0]), np.arange(Z.shape[1]), indexing='ij')
+  def plot_surface(self, Z):
+    X, Y = np.meshgrid(self.xofi(np.arange(Z.shape[0])), self.yofj(np.arange(Z.shape[1])), indexing='ij')
     plt.gca(projection='3d').plot_surface(X, Y, Z)
 
   @staticmethod
