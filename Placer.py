@@ -16,7 +16,7 @@ np.set_printoptions(edgeitems=30, linewidth=100000)
 
 class Placer:
   mu  = 1
-  target_density = 2
+  target_density = 0
   smoothing_param = 256
   resolution = 512
   pad_factor = 0.10
@@ -123,8 +123,8 @@ class Placer:
     @brief: Update the density map by subtracting, shifting, and adding density masks of provided cells
     '''
     for k in cells:
-      di = int(np.floor(self.iofx(x[k]))) - M[k].nonzero()[0][0] # Change in row index
-      dj = int(np.floor(self.jofy(y[k]))) - M[k].nonzero()[1][0] # Change in column index
+      di = int(np.floor(self.iofx(x[k] - self.half_dx[k]))) - M[k].nonzero()[0][0] # Change in row index
+      dj = int(np.floor(self.jofy(y[k] - self.half_dy[k]))) - M[k].nonzero()[1][0] # Change in column index
 
       if di != 0 or dj != 0: 
         D = D._add_sparse(-M[k]) # Subtract out this cells previous density contribution
